@@ -2,12 +2,28 @@ import json
 import os
 import time
 from datetime import datetime, timezone
+import traceback
 
 import boto3
 import pandas as pd
 import yfinance as yf
+import requests
 
+# S3 Client initialisieren
 s3 = boto3.client("s3")
+
+# User-Agent für HTTP-Requests setzen (wichtig für Yahoo Finance)
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+def test_connectivity() -> bool:
+    """Testet ob Internet-Verbindung von Lambda funktioniert"""
+    try:
+        response = requests.get("https://www.google.com", timeout=5, headers={"User-Agent": USER_AGENT})
+        print(f"[DEBUG] Connectivity test: {response.status_code}")
+        return response.status_code == 200
+    except Exception as e:
+        print(f"[ERROR] Connectivity test failed: {e}")
+        return False
 
 def fetch_prices(
     tickers: list[str],
@@ -20,12 +36,23 @@ def fetch_prices(
     Holt OHLCV für die letzten `days` Tage (rollierend) je Ticker.
     Gibt ein Dict ticker -> list of dict rows zurück.
     """
+    # Teste Connectivity zuerst
+    if not test_connectivity():
+        print("[ERROR] No internet connectivity from Lambda. Check VPC settings.")
+        return {}
+    
     joined = " ".join(tickers)
+    print(f"[INFO] Fetching prices for tickers: {tickers}, period: {days}d, interval: {interval}")
 
     def run_download_period(period_days: int, label: str, max_retries: int = 2):
         """Download mit Retry bei 429 (Rate Limit)"""
         for attempt in range(max_retries + 1):
             try:
+                print(f"[INFO] {label} attempt {attempt + 1}/{max_retries + 1}: downloading {period_days}d period")
+                # Setze User-Agent für yfinance
+                import yfinance.utils as yf_utils
+                yf_utils.get_user_agent = lambda: USER_AGENT
+                
                 df_local = yf.download(
                     tickers=joined,
                     period=f"{period_days}d",
@@ -51,16 +78,22 @@ def fetch_prices(
                         time.sleep(wait_time)
                     return df_local
             except json.JSONDecodeError as e:
-                # JSONDecodeError deutet auf leere/ungültige Antwort hin (Rate Limit)
+                print(f"[ERROR] {label} JSONDecodeError: {e}")
+                print(f"[ERROR] {label} This usually means empty response from API")
                 if attempt < max_retries:
-                    wait_time = (attempt + 1) * 90  # 90s, 180s bei JSON-Fehler
+                    wait_time = (attempt + 1) * 15  # Reduziert: 15s, 30s (Lambda Timeout vermeiden)
                     print(f"[WARN] {label} JSON decode error (likely rate limit), retry {attempt + 1}/{max_retries} after {wait_time}s")
                     time.sleep(wait_time)
                 else:
                     print(f"[ERROR] {label} JSON decode error after {max_retries} retries")
+                    print(f"[ERROR] {label} Full traceback: {traceback.format_exc()}")
                     return pd.DataFrame()
             except Exception as e:
                 error_str = str(e)
+                error_type = type(e).__name__
+                print(f"[ERROR] {label} Exception type: {error_type}, message: {error_str}")
+                print(f"[ERROR] {label} Full traceback: {traceback.format_exc()}")
+                
                 # Prüfe auf Rate-Limit-Indikatoren
                 is_rate_limit = (
                     "429" in error_str
@@ -70,21 +103,32 @@ def fetch_prices(
                 )
                 if is_rate_limit:
                     if attempt < max_retries:
-                        wait_time = (attempt + 1) * 90  # 90s, 180s bei Rate Limit
+                        wait_time = (attempt + 1) * 15  # Reduziert: 15s, 30s
                         print(f"[WARN] {label} rate limited, retry {attempt + 1}/{max_retries} after {wait_time}s")
                         time.sleep(wait_time)
                     else:
                         print(f"[ERROR] {label} rate limited after {max_retries} retries")
                         return pd.DataFrame()
                 else:
-                    print(f"[WARN] {label} error: {e}")
-                    return pd.DataFrame()
+                    # Bei anderen Fehlern: kürzere Retry-Zeit oder sofort abbrechen
+                    if attempt < max_retries and "timeout" in error_str.lower():
+                        wait_time = (attempt + 1) * 10
+                        print(f"[WARN] {label} timeout error, retry {attempt + 1}/{max_retries} after {wait_time}s")
+                        time.sleep(wait_time)
+                    else:
+                        print(f"[ERROR] {label} non-retryable error: {e}")
+                        return pd.DataFrame()
         return pd.DataFrame()
 
     def run_download_range(label: str, start: str, end: str, max_retries: int = 2):
         """Download mit Retry bei 429 (Rate Limit)"""
         for attempt in range(max_retries + 1):
             try:
+                print(f"[INFO] {label} attempt {attempt + 1}/{max_retries + 1}: downloading range {start} to {end}")
+                # Setze User-Agent für yfinance
+                import yfinance.utils as yf_utils
+                yf_utils.get_user_agent = lambda: USER_AGENT
+                
                 df_local = yf.download(
                     tickers=joined,
                     start=start,
@@ -110,17 +154,18 @@ def fetch_prices(
                         time.sleep(wait_time)
                     return df_local
             except json.JSONDecodeError as e:
-                # JSONDecodeError deutet auf leere/ungültige Antwort hin (Rate Limit)
+                print(f"[ERROR] {label} JSONDecodeError: {e}")
                 if attempt < max_retries:
-                    wait_time = (attempt + 1) * 90  # 90s, 180s bei JSON-Fehler
-                    print(f"[WARN] {label} JSON decode error (likely rate limit), retry {attempt + 1}/{max_retries} after {wait_time}s")
+                    wait_time = (attempt + 1) * 15
+                    print(f"[WARN] {label} JSON decode error, retry {attempt + 1}/{max_retries} after {wait_time}s")
                     time.sleep(wait_time)
                 else:
                     print(f"[ERROR] {label} JSON decode error after {max_retries} retries")
                     return pd.DataFrame()
             except Exception as e:
                 error_str = str(e)
-                # Prüfe auf Rate-Limit-Indikatoren
+                error_type = type(e).__name__
+                print(f"[ERROR] {label} Exception: {error_type}: {error_str}")
                 is_rate_limit = (
                     "429" in error_str
                     or "Too Many Requests" in error_str
@@ -129,15 +174,20 @@ def fetch_prices(
                 )
                 if is_rate_limit:
                     if attempt < max_retries:
-                        wait_time = (attempt + 1) * 90  # 90s, 180s bei Rate Limit
+                        wait_time = (attempt + 1) * 15
                         print(f"[WARN] {label} rate limited, retry {attempt + 1}/{max_retries} after {wait_time}s")
                         time.sleep(wait_time)
                     else:
                         print(f"[ERROR] {label} rate limited after {max_retries} retries")
                         return pd.DataFrame()
                 else:
-                    print(f"[WARN] {label} error: {e}")
-                    return pd.DataFrame()
+                    if attempt < max_retries and "timeout" in error_str.lower():
+                        wait_time = (attempt + 1) * 10
+                        print(f"[WARN] {label} timeout, retry {attempt + 1}/{max_retries} after {wait_time}s")
+                        time.sleep(wait_time)
+                    else:
+                        print(f"[ERROR] {label} error: {e}")
+                        return pd.DataFrame()
         return pd.DataFrame()
 
     df = run_download_period(days, "primary")
@@ -162,7 +212,13 @@ def fetch_prices(
         for t in tickers:
             for attempt in range(3):  # max 3 Versuche
                 try:
-                    hist = yf.Ticker(t).history(
+                    print(f"[INFO] history {t} attempt {attempt + 1}/3: fetching 3mo period")
+                    # Setze User-Agent
+                    import yfinance.utils as yf_utils
+                    yf_utils.get_user_agent = lambda: USER_AGENT
+                    
+                    ticker_obj = yf.Ticker(t)
+                    hist = ticker_obj.history(
                         period="3mo",  # 3 Monate statt 1 Jahr
                         interval=interval,
                         auto_adjust=False,
@@ -179,15 +235,17 @@ def fetch_prices(
                         if attempt < 2:
                             time.sleep((attempt + 1) * 30)
                 except json.JSONDecodeError as e:
-                    # JSONDecodeError deutet auf Rate Limit
+                    print(f"[ERROR] history {t} JSONDecodeError: {e}")
                     if attempt < 2:
-                        wait_time = (attempt + 1) * 90
-                        print(f"[WARN] history {t} JSON decode error (likely rate limit), retry {attempt + 1}/2 after {wait_time}s")
+                        wait_time = (attempt + 1) * 15
+                        print(f"[WARN] history {t} JSON decode error, retry {attempt + 1}/2 after {wait_time}s")
                         time.sleep(wait_time)
                     else:
                         print(f"[ERROR] history {t} JSON decode error after retries")
                 except Exception as e:
                     error_str = str(e)
+                    error_type = type(e).__name__
+                    print(f"[ERROR] history {t} Exception: {error_type}: {error_str}")
                     is_rate_limit = (
                         "429" in error_str
                         or "Too Many Requests" in error_str
@@ -196,7 +254,7 @@ def fetch_prices(
                     )
                     if is_rate_limit:
                         if attempt < 2:
-                            wait_time = (attempt + 1) * 90
+                            wait_time = (attempt + 1) * 15
                             print(f"[WARN] history {t} rate limited, retry {attempt + 1}/2 after {wait_time}s")
                             time.sleep(wait_time)
                         else:
@@ -222,14 +280,29 @@ def fetch_prices(
     return out
 
 def lambda_handler(event, context):
+    """Lambda Handler für tägliche Datenabfrage von Gold-Preisen"""
+    print(f"[INFO] Lambda started. Event: {json.dumps(event)}")
+    print(f"[INFO] Remaining time: {context.get_remaining_time_in_millis() / 1000:.1f}s")
+    
     # Env Variablen
-    bucket_name = os.environ["BUCKET_NAME"]
+    try:
+        bucket_name = os.environ["BUCKET_NAME"]
+    except KeyError:
+        error_msg = "BUCKET_NAME environment variable not set"
+        print(f"[ERROR] {error_msg}")
+        return {
+            "statusCode": 500,
+            "body": json.dumps({"error": error_msg}),
+        }
+    
     tickers_env = os.environ.get("TICKERS", "GC=F")  # mehrere mit Komma möglich
     days = int(os.environ.get("LOOKBACK_DAYS", "7"))  # Kleinere Defaults
     fallback_days = int(os.environ.get("FALLBACK_LOOKBACK_DAYS", "30"))
     max_days = int(os.environ.get("MAX_LOOKBACK_DAYS", "90"))
     interval = os.environ.get("INTERVAL", "1d")      # z.B. 1d, 1h, 4h
     prefix = os.environ.get("S3_PREFIX", "raw")
+
+    print(f"[INFO] Configuration: bucket={bucket_name}, tickers={tickers_env}, days={days}, interval={interval}")
 
     tickers = [t.strip() for t in tickers_env.split(",") if t.strip()]
 
@@ -246,9 +319,17 @@ def lambda_handler(event, context):
             fallback_days=fallback_days,
             max_days=max_days,
         )
+        
+        # Prüfe ob Daten erfolgreich geholt wurden
+        if not data or all(not v for v in data.values()):
+            print("[WARN] No data retrieved from API")
+            data = {"error": "No data retrieved from API", "tickers": tickers}
     except Exception as e:
         # Im Fehlerfall trotzdem S3 schreiben, damit Logs nicht verloren gehen
-        data = {"error": str(e), "tickers": tickers}
+        error_trace = traceback.format_exc()
+        print(f"[ERROR] Exception in fetch_prices: {e}")
+        print(f"[ERROR] Traceback: {error_trace}")
+        data = {"error": str(e), "traceback": error_trace, "tickers": tickers}
 
     body = {
         "timestamp_utc": ts_str,
@@ -258,15 +339,33 @@ def lambda_handler(event, context):
         "data": data,
     }
 
-    s3.put_object(
-        Bucket=bucket_name,
-        Key=s3_key,
-        Body=json.dumps(body),
-        ContentType="application/json",
-    )
-
-    return {
-        "statusCode": 200,
-        "body": json.dumps({"message": "OK", "s3_key": s3_key}),
-    }
+    try:
+        s3.put_object(
+            Bucket=bucket_name,
+            Key=s3_key,
+            Body=json.dumps(body, default=str),  # default=str für datetime-Objekte
+            ContentType="application/json",
+        )
+        print(f"[INFO] Successfully uploaded to S3: s3://{bucket_name}/{s3_key}")
+        
+        # Prüfe ob Daten vorhanden sind
+        has_data = data and any(v for v in data.values() if isinstance(v, list) and len(v) > 0)
+        status_code = 200 if has_data else 207  # 207 = Partial Success
+        
+        return {
+            "statusCode": status_code,
+            "body": json.dumps({
+                "message": "OK" if has_data else "Partial success - check data field",
+                "s3_key": s3_key,
+                "has_data": has_data,
+            }),
+        }
+    except Exception as e:
+        error_msg = f"Failed to upload to S3: {str(e)}"
+        print(f"[ERROR] {error_msg}")
+        print(f"[ERROR] Traceback: {traceback.format_exc()}")
+        return {
+            "statusCode": 500,
+            "body": json.dumps({"error": error_msg}),
+        }
     

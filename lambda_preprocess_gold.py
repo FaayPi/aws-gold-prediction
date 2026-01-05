@@ -11,6 +11,7 @@ Preprocess raw gold price JSON files (from yfinance) into a CSV in S3.
 import csv
 import json
 import os
+import traceback
 from datetime import datetime, timezone
 from io import StringIO
 from typing import Dict, List, Tuple
@@ -36,11 +37,34 @@ def parse_process_date(event) -> Tuple[datetime, bool]:
 
 
 def lambda_handler(event, context):
-    bucket_name = os.environ["BUCKET_NAME"]
+    """Lambda Handler für Preprocessing von Gold-Preisdaten"""
+    print(f"[INFO] Lambda started. Event: {json.dumps(event)}")
+    print(f"[INFO] Remaining time: {context.get_remaining_time_in_millis() / 1000:.1f}s")
+    
+    # Env Variablen
+    try:
+        bucket_name = os.environ["BUCKET_NAME"]
+    except KeyError:
+        error_msg = "BUCKET_NAME environment variable not set"
+        print(f"[ERROR] {error_msg}")
+        return {
+            "statusCode": 500,
+            "body": json.dumps({"error": error_msg}),
+        }
+    
     raw_prefix = os.environ.get("RAW_PREFIX", "raw/")
     processed_prefix = os.environ.get("PROCESSED_PREFIX", "processed/daily/")
 
-    process_date, process_date_from_event = parse_process_date(event)
+    try:
+        process_date, process_date_from_event = parse_process_date(event)
+    except ValueError as e:
+        error_msg = f"Invalid process_date: {str(e)}"
+        print(f"[ERROR] {error_msg}")
+        return {
+            "statusCode": 400,
+            "body": json.dumps({"error": error_msg}),
+        }
+    
     year = process_date.strftime("%Y")
     month = process_date.strftime("%m")
     day = process_date.strftime("%d")
@@ -49,24 +73,34 @@ def lambda_handler(event, context):
 
     # raw/YYYY/MM/DD/
     day_prefix = f"{raw_prefix}{year}/{month}/{day}/"
+    print(f"[INFO] Configuration: bucket={bucket_name}, raw_prefix={raw_prefix}, processed_prefix={processed_prefix}")
     print(f"[INFO] Processing raw files from prefix: s3://{bucket_name}/{day_prefix}")
 
     # Collect all raw JSON keys for the day
     raw_keys: List[str] = []
-    continuation_token = None
-    while True:
-        list_kwargs = {"Bucket": bucket_name, "Prefix": day_prefix}
-        if continuation_token:
-            list_kwargs["ContinuationToken"] = continuation_token
-        resp = s3.list_objects_v2(**list_kwargs)
-        for obj in resp.get("Contents", []):
-            key = obj["Key"]
-            if key.endswith(".json"):
-                raw_keys.append(key)
-        if resp.get("IsTruncated"):
-            continuation_token = resp.get("NextContinuationToken")
-        else:
-            break
+    try:
+        continuation_token = None
+        while True:
+            list_kwargs = {"Bucket": bucket_name, "Prefix": day_prefix}
+            if continuation_token:
+                list_kwargs["ContinuationToken"] = continuation_token
+            resp = s3.list_objects_v2(**list_kwargs)
+            for obj in resp.get("Contents", []):
+                key = obj["Key"]
+                if key.endswith(".json"):
+                    raw_keys.append(key)
+            if resp.get("IsTruncated"):
+                continuation_token = resp.get("NextContinuationToken")
+            else:
+                break
+    except Exception as e:
+        error_msg = f"Failed to list S3 objects: {str(e)}"
+        print(f"[ERROR] {error_msg}")
+        print(f"[ERROR] Traceback: {traceback.format_exc()}")
+        return {
+            "statusCode": 500,
+            "body": json.dumps({"error": error_msg}),
+        }
 
     if not raw_keys:
         msg = f"No raw files found for {date_str} under prefix {day_prefix}"
@@ -78,31 +112,60 @@ def lambda_handler(event, context):
 
     for key in raw_keys:
         print(f"[INFO] Reading raw file: {key}")
-        obj = s3.get_object(Bucket=bucket_name, Key=key)
-        body = obj["Body"].read().decode("utf-8")
-        payload = json.loads(body)
+        try:
+            obj = s3.get_object(Bucket=bucket_name, Key=key)
+            body = obj["Body"].read().decode("utf-8")
+            payload = json.loads(body)
 
-        data = payload.get("data", {})
-        # data is expected: { "GC=F": [ { "datetime": "...", "Open": ..., "High": ..., "Low": ..., "Close": ..., "Volume": ... }, ... ] }
-        for ticker, rows in data.items():
-            if not isinstance(rows, list):
+            data = payload.get("data", {})
+            
+            # Handle error case: data might contain "error" key instead of ticker data
+            if isinstance(data, dict) and "error" in data:
+                print(f"[WARN] Raw file {key} contains error, skipping: {data.get('error')}")
                 continue
-            ticker_up = str(ticker).upper()
-            for row in rows:
-                dt_str = row.get("datetime")
-                if not dt_str:
+            
+            # Validate data structure
+            if not isinstance(data, dict):
+                print(f"[WARN] Raw file {key} has invalid data structure (expected dict, got {type(data).__name__}), skipping")
+                continue
+            
+            # data is expected: { "GC=F": [ { "datetime": "...", "Open": ..., "High": ..., "Low": ..., "Close": ..., "Volume": ... }, ... ] }
+            for ticker, rows in data.items():
+                # Skip metadata keys that are not ticker data
+                if ticker in ["error", "traceback", "tickers"]:
                     continue
-                candidate_rows.append(
-                    {
-                        "datetime": dt_str,
-                        "ticker": ticker_up,
-                        "open": row.get("Open"),
-                        "high": row.get("High"),
-                        "low": row.get("Low"),
-                        "close": row.get("Close"),
-                        "volume": row.get("Volume"),
-                    }
-                )
+                
+                if not isinstance(rows, list):
+                    print(f"[WARN] Ticker {ticker} has invalid rows format (expected list, got {type(rows).__name__}), skipping")
+                    continue
+                
+                ticker_up = str(ticker).upper()
+                for row in rows:
+                    # Validate that row is a dictionary (CRITICAL: prevents AttributeError)
+                    if not isinstance(row, dict):
+                        print(f"[WARN] Row in ticker {ticker} is not a dictionary (got {type(row).__name__}: {str(row)[:100]}), skipping")
+                        continue
+                    
+                    dt_str = row.get("datetime")
+                    if not dt_str:
+                        continue
+                    candidate_rows.append(
+                        {
+                            "datetime": dt_str,
+                            "ticker": ticker_up,
+                            "open": row.get("Open"),
+                            "high": row.get("High"),
+                            "low": row.get("Low"),
+                            "close": row.get("Close"),
+                            "volume": row.get("Volume"),
+                        }
+                    )
+        except Exception as e:
+            error_msg = f"Failed to process raw file {key}: {str(e)}"
+            print(f"[ERROR] {error_msg}")
+            print(f"[ERROR] Traceback: {traceback.format_exc()}")
+            # Continue processing other files
+            continue
 
     # Decide which date to process: preferred process_date; if none found and not forced by event, fall back to latest available
     rows_by_key: Dict[Tuple[str, str], Dict] = {}
@@ -125,23 +188,32 @@ def lambda_handler(event, context):
         return {"statusCode": 200, "body": json.dumps({"message": msg})}
 
     # Build CSV in-memory
-    output = StringIO()
-    fieldnames = ["datetime", "ticker", "open", "high", "low", "close", "volume"]
-    writer = csv.DictWriter(output, fieldnames=fieldnames)
-    writer.writeheader()
-    for (_, _), row in sorted(rows_by_key.items(), key=lambda kv: kv[0]):
-        writer.writerow(row)
-    csv_data = output.getvalue()
-    output.close()
+    try:
+        output = StringIO()
+        fieldnames = ["datetime", "ticker", "open", "high", "low", "close", "volume"]
+        writer = csv.DictWriter(output, fieldnames=fieldnames)
+        writer.writeheader()
+        for (_, _), row in sorted(rows_by_key.items(), key=lambda kv: kv[0]):
+            writer.writerow(row)
+        csv_data = output.getvalue()
+        output.close()
 
-    out_key = f"{processed_prefix}gold_prices_{date_compact}.csv"
-    s3.put_object(
-        Bucket=bucket_name,
-        Key=out_key,
-        Body=csv_data.encode("utf-8"),
-        ContentType="text/csv",
-    )
+        out_key = f"{processed_prefix}gold_prices_{date_compact}.csv"
+        s3.put_object(
+            Bucket=bucket_name,
+            Key=out_key,
+            Body=csv_data.encode("utf-8"),
+            ContentType="text/csv",
+        )
 
-    msg = f"Processed {len(rows_by_key)} rows for {date_str} into {out_key}"
-    print(f"[INFO] {msg}")
-    return {"statusCode": 200, "body": json.dumps({"message": msg, "output_key": out_key})}
+        msg = f"Processed {len(rows_by_key)} rows for {selected_date} into {out_key}"
+        print(f"[INFO] {msg}")
+        return {"statusCode": 200, "body": json.dumps({"message": msg, "output_key": out_key})}
+    except Exception as e:
+        error_msg = f"Failed to create or upload CSV: {str(e)}"
+        print(f"[ERROR] {error_msg}")
+        print(f"[ERROR] Traceback: {traceback.format_exc()}")
+        return {
+            "statusCode": 500,
+            "body": json.dumps({"error": error_msg}),
+        }
