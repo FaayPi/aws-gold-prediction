@@ -1,2 +1,9 @@
 .venv_tf/
 *.dylib
+.venv_tf/
+.venv/
+__pycache__/
+*.pyc
+*.pkl
+*.model
+.DS_Store
