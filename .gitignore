@@ -1,9 +1,75 @@
-.venv_tf/
-*.dylib
-.venv_tf/
-.venv/
-__pycache__/
+# Python
 *.pyc
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual Environments
+.venv/
+venv/
+ENV/
+env/
+.venv_tf/
+
+# MLflow
+mlflow.db
+mlruns/
+*.db
+
+# AWS Credentials & Keys (SECURITY!)
+*.pem
+*.key
+.aws/
+aws-credentials.txt
+setup_mlflow_env.sh  # Falls AWS Credentials enthalten
+
+# Model files (optional - uncomment if you don't want to track models)
+# models/*.pkl
+# models/*/model_*.pkl
+# models/*/scaler_*.pkl
+# models/*/features_*.pkl
+
+# Temporary data files
+gold_prices_*.json
+*_raw_*.json
+*_processed_*.csv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Logs
+*.log
+logs/
+*.out
+
+# Temporary files
+*.tmp
+*.temp
+tmp/
+temp/
+
+# Already in your .gitignore
+*.dylib
 *.pkl
 *.model
-.DS_Store

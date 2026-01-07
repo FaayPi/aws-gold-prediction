@@ -8,4 +8,6 @@ statsmodels>=0.14.0
 xgboost>=2.0.0
 lightgbm>=4.0.0
 tensorflow>=2.13.0
+mlflow>=3.8.1
+boto3>=1.42.0
 
