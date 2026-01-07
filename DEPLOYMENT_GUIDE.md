@@ -33,7 +33,7 @@ The system will:
 
 Create a new directory for your Lambda function:
 
-```bash
+```bashmlflow ui --port 5002
 mkdir -p lambda_prediction_service
 cd lambda_prediction_service
 ```
