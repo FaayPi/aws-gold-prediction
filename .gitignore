@@ -40,6 +40,7 @@ gold_prices_*.json
 # IDE
 .vscode/
 .idea/
+.cursor/
 *.swp
 *.swo
 *~
@@ -73,3 +74,33 @@ temp/
 *.dylib
 *.pkl
 *.model
+
+# Lambda deployment artifacts
+lambda/*/*.zip
+lambda/flask_deployment/bin/
+lambda/flask_deployment/*-*.dist-info/
+# Lambda deployment - installed packages (if reinstalled)
+lambda/flask_deployment/blinker/
+lambda/flask_deployment/click/
+lambda/flask_deployment/flask/
+lambda/flask_deployment/itsdangerous/
+lambda/flask_deployment/jinja2/
+lambda/flask_deployment/markupsafe/
+lambda/flask_deployment/werkzeug/
+
+# Environment variables (SECURITY - API Keys, Secrets!)
+.env
+.env.local
+.env.*.local
+web_app/.env
+*.env
+
+# CSV data files (can be large)
+*.csv
+gold_*.csv
+*_data.csv
+
+# Web app build artifacts
+web_app/venv/
+web_app/.venv/
+web_app/__pycache__/

@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gold Price Predictions</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>💰 Gold Price Predictions</h1>
+            <p class="subtitle">ARIMA Model Forecast</p>
+        </header>
+
+        {% if error %}
+        <div class="error-box">
+            <h2>⚠️ Error</h2>
+            <p>{{ error }}</p>
+            <p class="hint">Set MOCK_MODE=true for local testing without API Gateway</p>
+        </div>
+        {% elif predictions and predictions.get('success') %}
+        <div class="predictions-container">
+            <div class="info-section">
+                <div class="info-item">
+                    <span class="label">Model Name:</span>
+                    <span class="value">{{ predictions.get('model_name', 'N/A') }}</span>
+                </div>
+                <div class="info-item">
+                    <span class="label">Model Type:</span>
+                    <span class="value">{{ predictions.get('model_type', 'N/A') }}</span>
+                </div>
+                <div class="info-item">
+                    <span class="label">Generated At:</span>
+                    <span class="value">{{ predictions.get('generated_at', 'N/A')[:19] if predictions.get('generated_at') else 'N/A' }}</span>
+                </div>
+                <div class="info-item">
+                    <span class="label">Last Updated:</span>
+                    <span class="value">{{ predictions.get('timestamp', 'N/A')[:19] if predictions.get('timestamp') else 'N/A' }}</span>
+                </div>
+            </div>
+
+            <div class="predictions-grid">
+                {% if predictions.get('predictions') %}
+                <div class="prediction-card tomorrow">
+                    <div class="card-header">
+                        <h2>📅 Tomorrow</h2>
+                        <span class="horizon">+1 Day</span>
+                    </div>
+                    <div class="price">
+                        ${{ "%.2f"|format(predictions.predictions.tomorrow.price) }}
+                    </div>
+                    <div class="unit">per oz</div>
+                </div>
+
+                <div class="prediction-card day-after-tomorrow">
+                    <div class="card-header">
+                        <h2>📆 Day After Tomorrow</h2>
+                        <span class="horizon">+2 Days</span>
+                    </div>
+                    <div class="price">
+                        ${{ "%.2f"|format(predictions.predictions.day_after_tomorrow.price) }}
+                    </div>
+                    <div class="unit">per oz</div>
+                </div>
+                {% endif %}
+            </div>
+
+            {% if predictions.get('note') %}
+            <div class="note-box">
+                <p>ℹ️ {{ predictions.note }}</p>
+            </div>
+            {% endif %}
+        </div>
+        {% else %}
+        <div class="error-box">
+            <h2>⚠️ No Data</h2>
+            <p>No predictions available at this time.</p>
+        </div>
+        {% endif %}
+
+        <footer>
+            <button onclick="location.reload()" class="refresh-btn">🔄 Refresh</button>
+        </footer>
+    </div>
+</body>
+</html>
+
