@@ -172,16 +172,6 @@ Instead of managing servers, we deploy our Flask application as a **serverless f
 | **Storage** | Included in price | Separate EBS volumes |
 | **Best For** | Simple web apps, blogs | Complex applications, enterprise |
 
-### **Cost Comparison Example:**
-
-**Lightsail:**
-- $3.50/month: 512MB RAM, 1 vCPU (small web app)
-- $5/month: 1GB RAM, 1 vCPU (our use case)
-- $10/month: 2GB RAM, 1 vCPU
-
-**EC2 (t3.micro - similar specs):**
-- ~$7-10/month (on-demand, 24/7)
-
 
 ---
 
