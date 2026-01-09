@@ -47,12 +47,6 @@ Instead of managing servers, we deploy our Flask application as a **serverless f
 - **Simple Deployment:** Just zip your code and upload
 - **Built-in Security:** API Gateway handles authentication/authorization
 
-### ⚠️ **Considerations:**
-- **Cold Starts:** First request may be slower (~1-2 seconds)
-- **Timeout Limits:** Max 15 minutes execution time
-- **Memory Limits:** Up to 10GB RAM available
-- **Package Size:** Deployment package size limits apply
-
 ---
 
 ## Key Components
@@ -119,18 +113,6 @@ Instead of managing servers, we deploy our Flask application as a **serverless f
     http://your-lightsail-ip:8080
     ```
   - Web app runs on a **virtual server** (runs 24/7)
-
----
-
-## Quick Comparison
-
-| Component | Traditional (EC2) | Our Approach |
-|-----------|-------------------|--------------|
-| **Web App Hosting** | EC2 instance (24/7) | Lightsail (24/7, simplified) |
-| **API Backend** | EC2 instance (24/7) | Lambda (runs on demand) |
-| **Cost Model** | Fixed monthly cost | Pay-per-use (Lambda) + Fixed (Lightsail) |
-| **Management** | Server management needed | Minimal (Lightsail) + Zero (Lambda) |
-| **Setup Complexity** | High | Low (Lightsail) + Medium (Lambda) |
 
 ---
 
